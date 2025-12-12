@@ -19,4 +19,4 @@ release:
     owner: whiplashvin
     name: alpstein-tui
 changelog:
-  skip: false
+  disable: true
