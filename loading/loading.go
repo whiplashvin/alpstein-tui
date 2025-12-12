@@ -46,7 +46,7 @@ func (m Model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 
 func (m Model)View()string{
    spin := m.Spinner.Style.
-		Foreground(lipgloss.Color("#ad46ff")).                  
+		Foreground(lipgloss.Color("#74d4ff")).                  
         Align(lipgloss.Center).
         Render(m.Spinner.View()+"  Alpstein loading")
 

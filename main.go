@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/whiplashvin/alpstein-tui/loading"
@@ -81,8 +82,14 @@ func initModel(u,c,cb string)*model{
 	s := spinner.New()
 	s.Spinner = spinner.Meter
 	ti := textinput.New()
+	ti.Placeholder = "auth-key"
 	ti.Focus()
-	ti.Placeholder = "auth key"
+	ti.Cursor.BlinkSpeed = time.Millisecond * 500 
+	ti.Cursor.Style = lipgloss.NewStyle().
+    Foreground(lipgloss.Color("#74d4ff")) 
+	ti.Width = 40
+	ti.PlaceholderStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#555"))
+	ti.TextStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#74d4ff")) 
 	return &model{
 		BE_URL: u,
 		OAUTH_CLIENT: c,
@@ -96,10 +103,10 @@ func initModel(u,c,cb string)*model{
 }
 func(m model)Init()tea.Cmd{
 	m.generateSigninURL()
-	return nil
+	return textinput.Blink
 }
 func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
-	var cmds []tea.Cmd
+	// var cmds []tea.Cmd
 	switch msg := msg.(type){
 		case err.ErrSignal:
 				m.Screen = ErrorScreen
@@ -157,12 +164,15 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
         	   return m, cmd
     		}
 		default: 	
-            i, cmd := m.t.Update(msg)
-			m.t = i
+			var cmd tea.Cmd
+            m.t, cmd = m.t.Update(msg)
             return m, cmd
 		}
 	}
-	return m,tea.Batch(cmds...)
+	var cmd tea.Cmd
+	m.t, cmd = m.t.Update(msg)
+    return m, cmd
+	// return m,tea.Batch(cmds...)
 }
 func(m model)View()string{
 	switch m.Screen {
@@ -219,7 +229,7 @@ func(m *model) generateSigninURL(){
     )
 	url := googleOAuthConfig.AuthCodeURL(oauthStateString)
 	fmt.Println(url)
-	openBrowser(url)    
+	// openBrowser(url)    
 }
 
 func openBrowser(url string) error {
@@ -307,10 +317,14 @@ func (m *model) AuthScreen() string {
     messageHeight := 1
 
     // Input field
-	inputStyle := lipgloss.NewStyle().Width(40).Background(lipgloss.Color("#18181b")).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#74d4ff")).Padding(0,1)
-    input := inputStyle.Render(m.t.View())
-    inputCentered := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, input)
-    inputHeight := lipgloss.Height(input)
+	inputStyle := lipgloss.NewStyle().Width(m.width).AlignHorizontal(lipgloss.Center).Background(lipgloss.Color("#18181b"))
+	containerStyle := lipgloss.NewStyle().
+    Width(45).
+    AlignHorizontal(lipgloss.Center).
+	Background(lipgloss.Color("#18181b")).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#74d4ff")).Padding(0,1)
+	temp := containerStyle.Render(m.t.View())
+    centeredinput := inputStyle.Render(temp)
+    inputHeight := lipgloss.Height(temp)
 
     // Total content height (message + small gap + input)
     gap := 1
@@ -332,9 +346,10 @@ func (m *model) AuthScreen() string {
     b.WriteString(strings.Repeat("\n", topPad))
     b.WriteString(messageCentered)
     b.WriteString("\n\n") // message → input gap
-    b.WriteString(inputCentered)
+    b.WriteString(centeredinput)
     b.WriteString(strings.Repeat("\n", bottomPad))
 
     return bg.Render(b.String())
 }
 
+// cmj2mum88000901o848ygdwzg
