@@ -229,7 +229,7 @@ func(m *model) generateSigninURL(){
     )
 	url := googleOAuthConfig.AuthCodeURL(oauthStateString)
 	fmt.Println(url)
-	// openBrowser(url)    
+	openBrowser(url)    
 }
 
 func openBrowser(url string) error {
@@ -351,5 +351,3 @@ func (m *model) AuthScreen() string {
 
     return bg.Render(b.String())
 }
-
-// cmj2mum88000901o848ygdwzg
