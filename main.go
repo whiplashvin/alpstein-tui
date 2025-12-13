@@ -287,11 +287,6 @@ func(m *model) getUserDetails(jwt interface{})tea.Cmd{
 		return userMsg(user.Data.FirstName)
 	}
 }
-// func (m *model)handleLoading(state bool)tea.Cmd{
-// 	return func() tea.Msg {
-// 		return loadingState(state)
-// 	}
-// }
 func (m *model)handleError(msg string)tea.Cmd{
 	return func() tea.Msg {
 		return ErrorMessage(msg)
@@ -374,6 +369,5 @@ func (m *model) AuthScreen() string {
 }
 
 
-// cmj40fw1o000201pa5256kbj2
 
 
