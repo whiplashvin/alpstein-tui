@@ -12,17 +12,23 @@ type Model struct{
 	Width int
 	Height int
 	Spinner spinner.Model
+	bgColor string
+	primaryTextColor string
+	secondaryTextColor string
 }
 
-func InitLoading(width,height int)*Model{
+type LoadingSignal struct{}
+
+func InitLoading()*Model{
 	s := spinner.New()
 	s.Spinner = spinner.Meter
 
 	return &Model{
 		ScreenName: "Loading",
-		Width: width,
-		Height: height,
 		Spinner: s,
+		bgColor: "#18181b",
+		primaryTextColor: "#a3b3ff",
+		secondaryTextColor: "#c7d8ff",
 	}
 }
 func (m Model)Init()tea.Cmd{
@@ -31,6 +37,10 @@ func (m Model)Init()tea.Cmd{
 
 func (m Model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	switch msg := msg.(type){
+	case tea.WindowSizeMsg:
+        m.Width = msg.Width
+		m.Height = msg.Height
+        return m, nil
 	case spinner.TickMsg:
         var cmd tea.Cmd
         m.Spinner, cmd = m.Spinner.Update(msg)
@@ -40,14 +50,20 @@ func (m Model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 		case "ctrl+c":
 			return m,tea.Quit
 		}
+	case LoadingSignal:
+		return m,nil
 	}
 	return m,nil
 }
 
 func (m Model)View()string{
    spin := m.Spinner.Style.
-		Foreground(lipgloss.Color("#74d4ff")).                  
-        Align(lipgloss.Center).
+		Height(m.Height).
+		Width(m.Width).
+   		Background(lipgloss.Color(m.bgColor)).
+		Foreground(lipgloss.Color(m.primaryTextColor)).                  
+        AlignHorizontal(lipgloss.Center).
+		AlignVertical(lipgloss.Center).
         Render(m.Spinner.View()+"  Alpstein loading")
 
     return lipgloss.Place(

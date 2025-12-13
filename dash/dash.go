@@ -20,11 +20,14 @@ type model struct{
 	CurrUser string
 	Cryptos string
 	ErrorModel tea.Model
+	bgColor string
+	primaryTextColor string
+	secondaryTextColor string
 }
 
 type Cryptos string
 
-func InitDash(jwt interface{},url,currUser string,width,height int)*model{
+func InitDash(jwt string,url,currUser string,width,height int)*model{
 	return &model{
 		ScreenName: "Dash",
 		Jwt: jwt,
@@ -32,11 +35,15 @@ func InitDash(jwt interface{},url,currUser string,width,height int)*model{
 		Width: width,
 		Height: height,
 		CurrUser: currUser,
+		bgColor: "#18181b",
+		primaryTextColor: "#a3b3ff",
+		secondaryTextColor: "#c7d8ff",
 	}
 }
 
 func (m model)Init()tea.Cmd{
-	return m.FetchLiveCryptos()
+	// return m.FetchLiveCryptos() 
+	return nil
 }
 
 func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
@@ -55,8 +62,13 @@ func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 }
 
 func (m model)View()string{
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Width(m.Width).Align(lipgloss.Center).MarginTop(2).MarginBottom(5)
-	s := fmt.Sprintf("Hey %s! Welcome to Alpstein\n %s",m.CurrUser,m.Cryptos)
+	style := lipgloss.NewStyle().
+	Height(m.Height).Width(m.Width).
+	Background(lipgloss.Color(m.bgColor)).Foreground(lipgloss.Color(m.primaryTextColor)).
+	AlignHorizontal(lipgloss.Center).AlignVertical(lipgloss.Center).
+	MarginTop(2).MarginBottom(5)
+	s := fmt.Sprintf("Hey %s! let's start tracking some cryptos.\n",m.CurrUser)
+	s += ``
 	styledHeading := style.Render(s)
 	return styledHeading
 }
@@ -80,3 +92,6 @@ func(m *model)FetchLiveCryptos()tea.Cmd{
 	return Cryptos(string(b))
 	}
 }
+
+                                                                          
+

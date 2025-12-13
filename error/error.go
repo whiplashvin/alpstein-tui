@@ -39,22 +39,13 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	
 	return m,nil
 }
-// func (m model) View() string {
-// 	bgStyle := lipgloss.NewStyle().Width(m.Width).Height(m.Height).Background(lipgloss.Color("#18181b"))
-// 	s := bgStyle.AlignHorizontal(lipgloss.Center).AlignVertical(lipgloss.Center).Foreground(lipgloss.Color("#e5e5e5")).Render(fmt.Sprintf("⚠️  oops! an error occured: %s ⚠️",m.ErrMsg))
-// 	s1 := bgStyle.AlignHorizontal(lipgloss.Center).AlignVertical(lipgloss.Bottom).Foreground(lipgloss.Color("#e5e5e5")).Render("press esc to go back")
 
-// 	var b strings.Builder
-// 	b.WriteString(s)
-// 	b.WriteString(s1)
-// 	return b.String()
-// }
 
 func (m model) View() string {
     bg := lipgloss.NewStyle().
         Width(m.Width).
         Height(m.Height).
-        Background(lipgloss.Color("#18181b"))
+        Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#a3b3ff"))
 
     // Main error message
     errText := fmt.Sprintf("⚠️  Oops! an error occurred: %s ⚠️", m.ErrMsg)

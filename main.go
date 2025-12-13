@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/whiplashvin/alpstein-tui/loading"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	err "github.com/whiplashvin/alpstein-tui/error"
 
@@ -21,10 +24,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 )
-
 
 
 type Screen int
@@ -37,12 +37,17 @@ const  (
 
 )
 type userMsg string
-type loadingState bool
 type ErrorMessage string
+type startAuthMsg struct{}
+
+type jwtResultMsg struct {
+	jwt string
+	err string
+}
 
 type HttpResponse  struct {
 	Message string 		`json:"message,omitempty"`
-	Data 	interface{}	`json:"data,omitempty"`
+	Data 	string	`json:"data,omitempty"`
 }
 
 
@@ -65,49 +70,58 @@ type model struct{
 	OAUTH_CB string
 	width int
 	height int
-	spinner  spinner.Model
 	CurrUser string
-	jwt interface{}
+	jwt string
 	Screen Screen
 	t textinput.Model
-	choices []string
-	selected map[int]struct{}
 	dashboard tea.Model
 	loader tea.Model
 	errorModel tea.Model
+	bgColor string
+	primaryTextColor string
+	secondaryTextColor string
 }
 
 func initModel(u,c,cb string)*model{
+	loaderMod := loading.InitLoading()
 	errMod := err.InitError()
-	s := spinner.New()
-	s.Spinner = spinner.Meter
 	ti := textinput.New()
 	ti.Placeholder = "auth-key"
 	ti.Focus()
 	ti.Cursor.BlinkSpeed = time.Millisecond * 500 
 	ti.Cursor.Style = lipgloss.NewStyle().
-    Foreground(lipgloss.Color("#74d4ff")) 
+    Foreground(lipgloss.Color("#a3b3ff")) 
 	ti.Width = 40
 	ti.PlaceholderStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#555"))
-	ti.TextStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#74d4ff")) 
+	ti.TextStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#a3b3ff")) 
 	return &model{
 		BE_URL: u,
 		OAUTH_CLIENT: c,
 		OAUTH_CB: cb,
-		spinner: s,
 		t: ti,
-		choices: []string{"Code","Gym","Guitar"},
-		selected: make(map[int]struct{}),
 		errorModel:  errMod,
+		loader: loaderMod,
+		bgColor: "#18181b",
+		primaryTextColor: "#a3b3ff",
+		secondaryTextColor: "#c7d8ff",
 	}
 }
 func(m model)Init()tea.Cmd{
+	log.Println("Program started")
 	m.generateSigninURL()
-	return textinput.Blink
+	return tea.Batch(textinput.Blink,m.loader.Init())
 }
 func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
-	// var cmds []tea.Cmd
 	switch msg := msg.(type){
+		case jwtResultMsg:
+	if msg.err != "" {
+		return m, m.handleError(msg.err)
+	}
+
+	m.jwt = msg.jwt
+	return m, m.getUserDetails(msg.jwt)
+		case startAuthMsg:
+    		return m, m.handleAuth()
 		case err.ErrSignal:
 				m.Screen = ErrorScreen
 				var cmd tea.Cmd
@@ -120,28 +134,23 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				return m,cmd 
 			}
 		case spinner.TickMsg:
-    		if m.Screen == LoadingScreen {
         		var cmd tea.Cmd
         		m.loader, cmd = m.loader.Update(msg)
         		return m, cmd
-    		}
 		case tea.WindowSizeMsg:
         	m.width = msg.Width
 			m.height = msg.Height
 			var cmd tea.Cmd
+			var cmd1 tea.Cmd
 			m.errorModel,cmd = m.errorModel.Update(msg)
-        	return m, cmd
+			m.loader,cmd1 = m.loader.Update(msg)
+        	return m, tea.Batch(cmd,cmd1)
 		 case userMsg:
         	m.CurrUser = string(msg)
         	dash := dash.InitDash(m.jwt,m.BE_URL,m.CurrUser,m.width,m.height)
         	m.dashboard = dash
 			m.Screen = DashScreen
 			return m, m.dashboard.Init()
-		case loadingState:
-			loader := loading.InitLoading(m.width,m.height)
-			m.loader = loader
-			m.Screen = LoadingScreen
-        	return m, m.loader.Init()
 		case ErrorMessage:
 			cmd := func ()tea.Msg  {
 				return err.ErrSignal{Msg: string(msg)}
@@ -159,20 +168,18 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				m.Screen = AuthScreen	
 			}
 		case "enter":
-			if m.Screen == AuthScreen {
-       	 	   cmd := m.handleAuth()
-        	   return m, cmd
+    		if m.Screen == AuthScreen {
+				m.Screen = LoadingScreen
+				return m, 
+				func() tea.Msg {
+            return startAuthMsg{}
+        }
     		}
-		default: 	
-			var cmd tea.Cmd
-            m.t, cmd = m.t.Update(msg)
-            return m, cmd
 		}
 	}
 	var cmd tea.Cmd
 	m.t, cmd = m.t.Update(msg)
     return m, cmd
-	// return m,tea.Batch(cmds...)
 }
 func(m model)View()string{
 	switch m.Screen {
@@ -192,6 +199,8 @@ func(m model)View()string{
 }
 
 func main(){
+	f, _ := os.Create("alpstein.log")
+    log.SetOutput(f)
 	godotenv.Load()
 	url := os.Getenv("BACKEND_URL")
 	oautClient := os.Getenv("OAUTH_CLIENT")
@@ -200,21 +209,6 @@ func main(){
 	newModel := initModel(url,oautClient,oautCb)
 	p := tea.NewProgram(*newModel,tea.WithAltScreen())
 	p.Run()
-}
-
-func(m *model) handleAuth()tea.Cmd{
-	auth := m.t.Value()
-	temp := strings.TrimLeft(auth,"[")
-	authKey := strings.TrimRight(temp,"]")
-	res,errCmd := m.fetchJWT(authKey)
-	if errCmd != nil{
-		return errCmd
-	}
-	m.jwt = res
-	return tea.Batch(
-		m.handleLoading(true),
-        m.getUserDetails(res),                        
-	)
 }
 
 func(m *model) generateSigninURL(){
@@ -238,30 +232,37 @@ func openBrowser(url string) error {
     return exec.Command(cmd, args...).Start()
 }
 
-func (m *model)fetchJWT(authKey string)(interface{},tea.Cmd){
-	resp ,err := http.Get(fmt.Sprintf("%scli-oauth/callback?auth-key=%s",m.BE_URL,authKey))
-	if err != nil{
-		return "",m.handleError(err.Error())
-	}
+func (m *model) handleAuth() tea.Cmd {
+	auth := strings.Trim(m.t.Value(), "[]")
 
-	defer resp.Body.Close()
-	body := resp.Body
+	return func() tea.Msg {
+		resp, err := http.Get(
+			fmt.Sprintf("%scli-oauth/callback?auth-key=%s", m.BE_URL, auth),
+		)
+		if err != nil {
+			return jwtResultMsg{err: err.Error()}
+		}
+		defer resp.Body.Close()
 
-	httpRes := HttpResponse{}
-	if err := json.NewDecoder(body).Decode(&httpRes); err != nil{
-		return "",m.handleError(err.Error())
-	}
+		var httpRes HttpResponse
+		if err := json.NewDecoder(resp.Body).Decode(&httpRes); err != nil {
+			return jwtResultMsg{err: err.Error()}
+		}
 
-	if resp.StatusCode == http.StatusNotFound{
-		return "",m.handleError(httpRes.Message)
+		if resp.StatusCode == http.StatusNotFound {
+			return jwtResultMsg{err: httpRes.Message}
+		}
+
+		return jwtResultMsg{jwt: httpRes.Data}
 	}
-	return httpRes.Data,nil
 }
+
 func(m *model) getUserDetails(jwt interface{})tea.Cmd{
 	return func () tea.Msg {	
 		req, err := http.NewRequest("GET", fmt.Sprintf("%s/user",m.BE_URL), nil)
 		if err != nil {
-			return m.handleError(err.Error())
+			// return m.handleError(err.Error())
+			return ErrorMessage(err.Error())
 		}
 		req.Header.Add("Authorization",fmt.Sprintf("Bearer %s",jwt))
 		
@@ -269,7 +270,8 @@ func(m *model) getUserDetails(jwt interface{})tea.Cmd{
 		resp, err := client.Do(req)
 		
 		if err != nil{
-			return m.handleError(err.Error())
+			// return m.handleError(err.Error())
+			return ErrorMessage(err.Error())
 		}
 		defer resp.Body.Close()
 		
@@ -279,16 +281,17 @@ func(m *model) getUserDetails(jwt interface{})tea.Cmd{
 				return m.handleError(err.Error())
 		}
 		if resp.StatusCode == http.StatusNotFound {
-			return m.handleError(user.Message)
+			// return m.handleError(user.Message)
+			return ErrorMessage(user.Message)
 		}
 		return userMsg(user.Data.FirstName)
 	}
 }
-func (m *model)handleLoading(state bool)tea.Cmd{
-	return func() tea.Msg {
-		return loadingState(state)
-	}
-}
+// func (m *model)handleLoading(state bool)tea.Cmd{
+// 	return func() tea.Msg {
+// 		return loadingState(state)
+// 	}
+// }
 func (m *model)handleError(msg string)tea.Cmd{
 	return func() tea.Msg {
 		return ErrorMessage(msg)
@@ -299,29 +302,44 @@ func (m *model) AuthScreen() string {
     bg := lipgloss.NewStyle().
         Width(m.width).
         Height(m.height).
-        Background(lipgloss.Color("#18181b"))
+        Background(lipgloss.Color(m.bgColor))
 
-    // Title
-    titleStyle := lipgloss.NewStyle().
-        Background(lipgloss.Color("#18181b")).
-        Foreground(lipgloss.Color("#74d4ff")).
+    logoStyle := lipgloss.NewStyle().
+        Background(lipgloss.Color(m.bgColor)).
+        Foreground(lipgloss.Color(m.primaryTextColor)).
         AlignHorizontal(lipgloss.Center).
-        Width(m.width).PaddingTop(2)
+        Width(m.width)
 
-    title := titleStyle.Render("Welcome to Alpstein TUI")
-    titleHeight := lipgloss.Height(title) + 1
+    logo := logoStyle.Render(`
+	
+--         _      _                 _            _         		-- 
+--        / \    | |  _ __    ___  | |_    ___  (_)  _ __  		-- 
+--       / _ \   | | | '_ \  / __| | __|  / _ \ | | | '_ \ 		-- 
+--      / ___ \  | | | |_) | \__ \ | |_  |  __/ | | | | | |		-- 
+--     /_/   \_\ |_| | .__/  |___/  \__|  \___| |_| |_| |_|		-- 
+--                   |_|                                   		-- 
 
-    // Message
-    message := "Please paste the auth key and press enter."
-    messageCentered := lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#74d4ff")).Width(m.width).AlignHorizontal(lipgloss.Center).Render(message)
+`)
+    logoHeight := lipgloss.Height(logo) + 1
+
+	brandingStyle := lipgloss.NewStyle().Width(m.width).AlignHorizontal(lipgloss.Center).
+	Background(lipgloss.Color(m.bgColor)).Foreground(lipgloss.Color(m.primaryTextColor)).Bold(true).Underline(true)
+	branding := brandingStyle.Render("AI-powered real-time crypto insights. Sans noise.")
+
+	subBrandingStyle := lipgloss.NewStyle().Width(m.width).AlignHorizontal(lipgloss.Center).
+	Background(lipgloss.Color(m.bgColor)).Foreground(lipgloss.Color(m.secondaryTextColor))
+	subBranding := subBrandingStyle.Render("Stay ahead with intelligent crypto analysis. Intense, data heavy blogs cleansed and made actionable.")
+
+    message := "enter the auth key and hit enter"
+    messageCentered := lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color(m.primaryTextColor)).Width(m.width).AlignHorizontal(lipgloss.Center).Render(message)
     messageHeight := 1
 
     // Input field
-	inputStyle := lipgloss.NewStyle().Width(m.width).AlignHorizontal(lipgloss.Center).Background(lipgloss.Color("#18181b"))
+	inputStyle := lipgloss.NewStyle().Width(m.width).AlignHorizontal(lipgloss.Center).Background(lipgloss.Color(m.bgColor))
 	containerStyle := lipgloss.NewStyle().
     Width(45).
     AlignHorizontal(lipgloss.Center).
-	Background(lipgloss.Color("#18181b")).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#74d4ff")).Padding(0,1)
+	Background(lipgloss.Color(m.bgColor)).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(m.primaryTextColor)).Padding(0,1)
 	temp := containerStyle.Render(m.t.View())
     centeredinput := inputStyle.Render(temp)
     inputHeight := lipgloss.Height(temp)
@@ -330,8 +348,8 @@ func (m *model) AuthScreen() string {
     gap := 1
     blockHeight := messageHeight + gap + inputHeight
 
-    // Remaining space after title
-    remaining := m.height - titleHeight
+    // Remaining space after logo
+    remaining := m.height - logoHeight
     if remaining < blockHeight {
         remaining = blockHeight
     }
@@ -341,8 +359,11 @@ func (m *model) AuthScreen() string {
 
     var b strings.Builder
 
-    b.WriteString(title)
+    b.WriteString(logo)
     b.WriteString("\n")
+	b.WriteString(branding)
+	b.WriteString("\n\n")
+	b.WriteString(subBranding)
     b.WriteString(strings.Repeat("\n", topPad))
     b.WriteString(messageCentered)
     b.WriteString("\n\n") // message → input gap
@@ -351,3 +372,8 @@ func (m *model) AuthScreen() string {
 
     return bg.Render(b.String())
 }
+
+
+// cmj40fw1o000201pa5256kbj2
+
+
