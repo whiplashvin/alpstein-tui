@@ -12,6 +12,9 @@ type model struct {
 	Width int
 	Height int
 	ErrMsg string
+    bgColor string
+	primaryTextColor string
+	secondaryTextColor string
 }
 
 type ErrSignal struct {
@@ -20,7 +23,11 @@ type ErrSignal struct {
 
 
 func InitError()*model{
-	return &model{}
+	return &model{
+        // bgColor: "#18181b",
+		primaryTextColor: "#a3b3ff",
+		secondaryTextColor: "#c7d8ff",
+    }
 }
 
 func(m model)Init()tea.Cmd{
@@ -45,7 +52,7 @@ func (m model) View() string {
     bg := lipgloss.NewStyle().
         Width(m.Width).
         Height(m.Height).
-        Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#a3b3ff"))
+        Background(lipgloss.Color(m.bgColor)).Foreground(lipgloss.Color(m.primaryTextColor))
 
     // Main error message
     errText := fmt.Sprintf("⚠️  Oops! an error occurred: %s ⚠️", m.ErrMsg)

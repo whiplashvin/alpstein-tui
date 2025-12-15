@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const version = "0.7"
 
 type Screen int
 
@@ -101,7 +103,7 @@ func initModel(u,c,cb string)*model{
 		t: ti,
 		errorModel:  errMod,
 		loader: loaderMod,
-		bgColor: "#18181b",
+		// bgColor: "#18181a",
 		primaryTextColor: "#a3b3ff",
 		secondaryTextColor: "#c7d8ff",
 	}
@@ -113,13 +115,24 @@ func(m model)Init()tea.Cmd{
 }
 func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	switch msg := msg.(type){
+		case dash.DebounceFetch:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
+		case dash.SetCryptoId:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
+		case dash.SetCurrCrypto:	
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
 		case jwtResultMsg:
-	if msg.err != "" {
-		return m, m.handleError(msg.err)
-	}
-
-	m.jwt = msg.jwt
-	return m, m.getUserDetails(msg.jwt)
+			if msg.err != "" {
+				return m, m.handleError(msg.err)
+			}
+			m.jwt = msg.jwt
+		return m, m.getUserDetails(msg.jwt)
 		case startAuthMsg:
     		return m, m.handleAuth()
 		case err.ErrSignal:
@@ -156,6 +169,7 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				return err.ErrSignal{Msg: string(msg)}
 			}
 			return m, cmd
+
 		case tea.KeyMsg:
 		switch msg.String(){
 		case "ctrl+c":
@@ -175,6 +189,18 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
             return startAuthMsg{}
         }
     		}
+		case "down":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
+		case "up":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
 		}
 	}
 	var cmd tea.Cmd
@@ -206,8 +232,16 @@ func main(){
 	oautClient := os.Getenv("OAUTH_CLIENT")
 	oautCb := os.Getenv("OAUTH_CB")
 
+
+	showVersion := flag.Bool("version", false, "print version and exit")
+    flag.Parse()
+    if *showVersion {
+        fmt.Println(version)
+        os.Exit(0)
+    }
+
 	newModel := initModel(url,oautClient,oautCb)
-	p := tea.NewProgram(*newModel,tea.WithAltScreen())
+	p := tea.NewProgram(*newModel,tea.WithAltScreen(),tea.WithMouseCellMotion())
 	p.Run()
 }
 
@@ -223,7 +257,7 @@ func(m *model) generateSigninURL(){
     )
 	url := googleOAuthConfig.AuthCodeURL(oauthStateString)
 	fmt.Println(url)
-	openBrowser(url)    
+	// openBrowser(url)    
 }
 
 func openBrowser(url string) error {
@@ -297,7 +331,7 @@ func (m *model) AuthScreen() string {
     bg := lipgloss.NewStyle().
         Width(m.width).
         Height(m.height).
-        Background(lipgloss.Color(m.bgColor))
+        Background(lipgloss.Color(m.bgColor)).Margin(0).Padding(0)
 
     logoStyle := lipgloss.NewStyle().
         Background(lipgloss.Color(m.bgColor)).
@@ -326,7 +360,7 @@ func (m *model) AuthScreen() string {
 	subBranding := subBrandingStyle.Render("Stay ahead with intelligent crypto analysis. Intense, data heavy blogs cleansed and made actionable.")
 
     message := "enter the auth key and hit enter"
-    messageCentered := lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color(m.primaryTextColor)).Width(m.width).AlignHorizontal(lipgloss.Center).Render(message)
+    messageCentered := lipgloss.NewStyle().Background(lipgloss.Color(m.bgColor)).Foreground(lipgloss.Color(m.primaryTextColor)).Width(m.width).AlignHorizontal(lipgloss.Center).Render(message)
     messageHeight := 1
 
     // Input field
@@ -371,3 +405,4 @@ func (m *model) AuthScreen() string {
 
 
 
+// cmj49a3am000p01quu0ew9i31

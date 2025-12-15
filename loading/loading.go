@@ -26,7 +26,7 @@ func InitLoading()*Model{
 	return &Model{
 		ScreenName: "Loading",
 		Spinner: s,
-		bgColor: "#18181b",
+		// bgColor: "#18181b",
 		primaryTextColor: "#a3b3ff",
 		secondaryTextColor: "#c7d8ff",
 	}
