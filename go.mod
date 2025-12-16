@@ -9,6 +9,8 @@ require (
 	golang.org/x/oauth2 v0.34.0
 )
 
+require github.com/gorilla/websocket v1.5.3 // indirect
+
 require (
 	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect

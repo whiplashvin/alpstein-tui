@@ -94,8 +94,8 @@ func initModel(u,c,cb string)*model{
 	ti.Cursor.Style = lipgloss.NewStyle().
     Foreground(lipgloss.Color("#a3b3ff")) 
 	ti.Width = 40
-	ti.PlaceholderStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#555"))
-	ti.TextStyle = lipgloss.NewStyle().Background(lipgloss.Color("#18181b")).Foreground(lipgloss.Color("#a3b3ff")) 
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#555"))
+	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#a3b3ff")) 
 	return &model{
 		BE_URL: u,
 		OAUTH_CLIENT: c,
@@ -115,6 +115,18 @@ func(m model)Init()tea.Cmd{
 }
 func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	switch msg := msg.(type){
+		case dash.PositionDisplayed:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
+		case dash.WSConnected:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
+		case dash.WSRespSingnal:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
 		case dash.DebounceFetch:
 			var cmd tea.Cmd
 			m.dashboard,cmd = m.dashboard.Update(msg)
@@ -140,7 +152,7 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				var cmd tea.Cmd
 				m.errorModel,cmd = m.errorModel.Update(msg)
 				return m, cmd
-		case dash.Cryptos:
+		case dash.LiveCryptosLoaded:
 			if m.Screen == DashScreen{
 				var cmd tea.Cmd
 				m.dashboard,cmd = m.dashboard.Update(msg)
@@ -155,8 +167,10 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 			m.height = msg.Height
 			var cmd tea.Cmd
 			var cmd1 tea.Cmd
+			// var cmd2 tea.Cmd
 			m.errorModel,cmd = m.errorModel.Update(msg)
 			m.loader,cmd1 = m.loader.Update(msg)
+			// m.dashboard,cmd2 = m.dashboard.Update(msg)
         	return m, tea.Batch(cmd,cmd1)
 		 case userMsg:
         	m.CurrUser = string(msg)
@@ -196,6 +210,30 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				return m, cmd
 			}
 		case "up":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
+		case "n":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
+		case "p":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
+		case "s":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
+		case "l":
 			if m.Screen == DashScreen{
 				var cmd tea.Cmd
 				m.dashboard, cmd = m.dashboard.Update(msg)
@@ -257,7 +295,7 @@ func(m *model) generateSigninURL(){
     )
 	url := googleOAuthConfig.AuthCodeURL(oauthStateString)
 	fmt.Println(url)
-	// openBrowser(url)    
+	openBrowser(url)    
 }
 
 func openBrowser(url string) error {
@@ -401,8 +439,3 @@ func (m *model) AuthScreen() string {
 
     return bg.Render(b.String())
 }
-
-
-
-
-// cmj49a3am000p01quu0ew9i31

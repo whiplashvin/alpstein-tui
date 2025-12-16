@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gorilla/websocket"
 )
 
 type CryptoModel struct {
@@ -39,9 +40,25 @@ type CryptoModel struct {
 	TriggeredAt		  int64			`json:"triggeredat"`
 	ClosureAt		  int64			`json:"closureat"`
 }
-
+type WSMsg struct{
+	Event string `json:"event"`
+	Payload string `json:"payload"`
+}
+type WSResp struct{
+	Kind string `json:"kind"`
+	Value float64 `json:"value"`
+}
+type CryptoQueryMetadata struct{
+	HasNextPage   bool   `json:"hasNextPage"`
+	HasPrevPage   bool   `json:"hasPrevPage"`
+	LastSeenTime  int64  `json:"lastSeenTime"`
+	FirstSeenTime int64  `json:"firstSeenTime"`
+	LastSeenId    string `json:"lastSeenId"`
+	FirstSeenId   string `json:"firstSeenId"`
+}
 type AllCryptoResponse struct{
-	Data []CryptoModel `json:"data"`
+	Data 	 []CryptoModel 		 `json:"data"`
+	Metadata CryptoQueryMetadata `json:"metadata"`
 }
 type CryptoAbout struct{
 	Id 	   string `json:"id"`
@@ -56,6 +73,8 @@ type model struct{
 	bgColor string
 	primaryTextColor string
 	secondaryTextColor string
+	tertiaryTextColor string
+	borderColor string
 	Width int
 	Height int
 	Jwt interface{}
@@ -66,16 +85,29 @@ type model struct{
 	CurrCryptoId string
 	ErrorModel tea.Model
 	CurrCrypto CryptoModel
+	PositionDisplayed string
+	QueryMetada CryptoQueryMetadata
 	debounceID int
+	WSConn *websocket.Conn
+	WSChan chan WSResp
+	WSRes WSResp
 }
 
 type DebounceFetch struct {
 	id int
 }
+type LiveCryptosLoaded struct {
+	Cryptos  []CryptoModel
+	Metadata CryptoQueryMetadata
+}
 type Cryptos []CryptoModel
+type QueryMetada CryptoQueryMetadata 
 type SetCryptoId string
 type SetCurrCrypto CryptoModel
-
+type WSConnected struct {
+	Conn *websocket.Conn
+}
+type WSRespSingnal WSResp
 func debounceCmd(id int, delay time.Duration) tea.Cmd {
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return DebounceFetch{id: id}
@@ -89,21 +121,25 @@ func InitDash(jwt string,url,currUser string,width,height int)*model{
 		// bgColor: "#18181b",
 		primaryTextColor: "#a3b3ff",
 		secondaryTextColor: "#c7d8ff",
+		tertiaryTextColor:	"#52525c",
+		borderColor: "#27272a",
 		Width: width,
 		Height: height,
 		Jwt: jwt,
 		Url: url,
-		Cursor: 0,
 		CurrUser: currUser,
+		PositionDisplayed: "long",
 	}
 }
 
 func (m model)Init()tea.Cmd{
-	return m.FetchLiveCryptos() 
+	return tea.Batch(m.FetchLiveCryptos())
 }
 
 func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	switch msg := msg.(type){
+	case PositionDisplayed:
+		m.PositionDisplayed = string(msg)
 	case DebounceFetch:
 		if msg.id != m.debounceID {
 			return m, nil
@@ -111,19 +147,47 @@ func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 		return m, func() tea.Msg {
 			return SetCryptoId(m.Cryptos[m.Cursor].Id)
 		}
+	case WSConnected:
+		if m.WSConn != nil {
+			m.WSConn.Close()
+		}
+		m.WSConn = msg.Conn
+		return m, m.readFromWSS()
+	case WSRespSingnal:
+		m.WSRes.Kind = msg.Kind
+		m.WSRes.Value = msg.Value
+		return m, m.readFromWSS() // 🔁 KEEP LISTENING
 	case SetCryptoId:
 		m.CurrCryptoId = string(msg)
 		cmd := m.fetchCryptoByID()
 		return m, cmd
 	case SetCurrCrypto:	
 		m.CurrCrypto = CryptoModel(msg)
-	case Cryptos:
-		m.Cryptos = msg
+		if msg.Position == "unclear"{
+			m.PositionDisplayed = "long"
+		}else{
+			m.PositionDisplayed = msg.Position
+		}
+		cmd := m.connectToWS()
+		return m,cmd
+	case LiveCryptosLoaded:
+		m.Cryptos = msg.Cryptos
 		m.CurrCryptoId = m.Cryptos[0].Id
 		m.CurrCrypto = m.Cryptos[0]
+		m.QueryMetada = msg.Metadata
+		m.Cursor = 0
+		cmd := m.connectToWS()
+		return m,cmd
+	case tea.WindowSizeMsg:
+        m.Width = msg.Width
+		m.Height = msg.Height
+        return m, nil
 	case tea.KeyMsg:
 		switch msg.String(){
 		case "ctrl+c":
+			if m.WSConn != nil{
+				m.WSConn.Close()
+			}
 			return m,tea.Quit
 		case "esc":
 			return m,tea.Quit
@@ -145,6 +209,34 @@ func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				// 	return SetCryptoId(m.Cryptos[m.Cursor].Id)
 				// }
 			}
+		case "n":
+			var cmd tea.Cmd
+			if m.QueryMetada.HasNextPage{
+				cmd = m.FetchNextCryptoBatch()
+				return m,cmd
+			}
+		case "p":
+			var cmd tea.Cmd
+			if m.QueryMetada.HasPrevPage{
+				cmd = m.FetchPrevCryptoBatch()
+				return m,cmd
+			}
+		case "s":
+			var cmd tea.Cmd
+			if m.CurrCrypto.Position == "unclear"{
+				cmd = func ()tea.Msg  {
+					return PositionDisplayed("short")
+				}
+				return m,cmd
+			}
+		case "l":
+			var cmd tea.Cmd
+			if m.CurrCrypto.Position == "unclear"{
+				cmd = func ()tea.Msg  {
+					return PositionDisplayed("long")
+				}
+				return m,cmd
+			}
 	}
 		
 	}
@@ -164,7 +256,7 @@ func (m model)View()string{
 	Width(m.Width / 2).
 	AlignHorizontal(lipgloss.Right).
 	Foreground(lipgloss.Color(m.primaryTextColor)).MarginTop(1).
-	Render(fmt.Sprintf("hey %s!", m.CurrUser))
+	Render(fmt.Sprintf("hey %s! 🫡", m.CurrUser))
 
 	heading := lipgloss.JoinHorizontal(
 		lipgloss.Top,
@@ -174,9 +266,14 @@ func (m model)View()string{
 
 	headingHeight := lipgloss.Height(heading)
 
-	remaining := m.Height - headingHeight - 1
-	sidebar := lipgloss.NewStyle().Width(m.Width * 1 / 4).Height(remaining).MarginLeft(2).Padding(1).Render(m.renderCryptos())
-	body := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 2).Height(remaining).Render("")
+	gap := 1 + 10
+	remaining := m.Height - headingHeight - gap
+	sidebar := lipgloss.NewStyle().Width((m.Width * 1 / 4) - 2).Height(remaining).MarginLeft(2).Padding(1).
+	Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(m.borderColor)).
+	Render(m.renderCryptos())
+	body := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 4).Height(remaining).AlignHorizontal(lipgloss.Center).
+	Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(m.borderColor)).
+	Render(m.renderCryptoyID())
 
 	
 main := lipgloss.JoinHorizontal(
@@ -185,12 +282,27 @@ main := lipgloss.JoinHorizontal(
 	body,
 )
 
+var footerStinng string
+if m.QueryMetada.HasPrevPage{
+	footerStinng += "[p] prev "
+}
+if m.QueryMetada.HasNextPage {
+	footerStinng += "[n] next "
+}
+footerStinng += "[d] docs "
+footerStinng += "[t] trades "
+footerStinng += "[▲] up "
+footerStinng += "[▼] down "
+footer := lipgloss.NewStyle().Width(m.Width-2).Height(1).Foreground(lipgloss.Color(m.tertiaryTextColor)).
+MarginLeft(2).AlignHorizontal(lipgloss.Center).Render(footerStinng)
 return bg.Render(
 	lipgloss.JoinVertical(
 		lipgloss.Top,
 		heading,
-		"\n",
+		"\n\n\n",
 		main,
+		"\n\n\n",
+		footer,
 	),
 )
 }
@@ -214,11 +326,61 @@ func(m *model)FetchLiveCryptos()tea.Cmd{
 	httpRes := AllCryptoResponse{}
 	json.NewDecoder(resp.Body).Decode(&httpRes)
 
-
-	return Cryptos(httpRes.Data)
+	return LiveCryptosLoaded{
+		Cryptos: httpRes.Data,
+		Metadata: httpRes.Metadata,
+		}
 	}
 }
+func (m *model)FetchNextCryptoBatch()tea.Cmd{
+	return func() tea.Msg {
+		req,err := http.NewRequest(http.MethodGet,fmt.Sprintf("%s/live-cryptos?action=next&limit=8&last_seen=%d|%s",m.Url,m.QueryMetada.LastSeenTime,m.QueryMetada.LastSeenId),nil)
+			if err != nil{
 
+		}
+		req.Header.Set("Authorization",fmt.Sprintf("Bearer %s",m.Jwt))
+		client := http.Client{
+			 Timeout: 10 * time.Second,
+		}
+		resp,err := client.Do(req)
+		if err != nil{
+		
+		}
+		defer resp.Body.Close()
+			httpRes := AllCryptoResponse{}
+		json.NewDecoder(resp.Body).Decode(&httpRes)
+
+		return LiveCryptosLoaded{
+			Cryptos: httpRes.Data,
+			Metadata: httpRes.Metadata,
+		}
+	}
+}
+func (m *model)FetchPrevCryptoBatch()tea.Cmd{
+	return func() tea.Msg {
+		req,err := http.NewRequest(http.MethodGet,fmt.Sprintf("%s/live-cryptos?action=prev&limit=8&last_seen=%d|%s",m.Url,m.QueryMetada.FirstSeenTime,m.QueryMetada.FirstSeenId),nil)
+			if err != nil{
+
+		}
+		req.Header.Set("Authorization",fmt.Sprintf("Bearer %s",m.Jwt))
+		client := http.Client{
+			 Timeout: 10 * time.Second,
+		}
+		resp,err := client.Do(req)
+		if err != nil{
+		
+		}
+		defer resp.Body.Close()
+		httpRes := AllCryptoResponse{}
+		json.NewDecoder(resp.Body).Decode(&httpRes)
+
+		log.Println(httpRes)
+		return LiveCryptosLoaded{
+			Cryptos: httpRes.Data,
+			Metadata: httpRes.Metadata,
+		}
+	}
+}
 func(m *model)fetchCryptoByID()tea.Cmd{
 	return func () tea.Msg {	
 		req,err := http.NewRequest(http.MethodGet,fmt.Sprintf("https://api.alpstein.tech/api/v1/crypto/%s",m.CurrCryptoId),nil)
@@ -243,7 +405,7 @@ func(m *model)fetchCryptoByID()tea.Cmd{
 	}
 }
 
-func (m *model) renderCryptos() string {
+func (m *model)renderCryptos()string{
 	var b strings.Builder
 
 	for i, c := range m.Cryptos {
@@ -258,8 +420,13 @@ func (m *model) renderCryptos() string {
 			)
 		}
 
+		x := ""
+		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00d3f2"))
+		if c.Status == "triggered"{
+			x += statusStyle.Render("⦿")
+		}
 		// Symbol
-		b.WriteString(rowStyle.Render(prefix + c.Symbol))
+		b.WriteString(rowStyle.Render(prefix + c.Symbol + " " +x))
 		b.WriteString("\n")
 
 		// Heading truncation
@@ -284,3 +451,169 @@ func (m *model) renderCryptos() string {
 
 	return b.String()
 }
+
+func(m *model)renderCryptoyID()string{
+	if m.CurrCrypto.Id != "" {
+		var s  = lipgloss.NewStyle().Foreground(lipgloss.Color(m.secondaryTextColor)).AlignHorizontal(lipgloss.Center).MarginTop(2)
+		heading := m.CurrCrypto.Heading
+		heading += m.CurrCrypto.Name
+		
+		agentsOp := "Agent's Opinion \n"
+		agentsOp += m.renderSignals()
+
+		trivia := ""
+		if m.CurrCrypto.Position == "unclear"{
+			trivia += "[s] short position [l] long position"
+		}
+
+		liveStats := "Live Stats ⚡️\n"
+		liveStats += m.renderLiveStats()
+
+		var output strings.Builder
+		output.WriteString(heading)
+		output.WriteString("\n\n\n")
+		output.WriteString(agentsOp)
+		output.WriteString("\n")
+		output.WriteString(trivia)
+		output.WriteString("\n\n\n")
+		output.WriteString(liveStats)
+		return s.Render(output.String())
+	}else {
+		return ""
+	}
+}
+type PositionDisplayed string
+
+func (m *model) renderSignals() string {
+	box := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.secondaryTextColor)).
+		AlignHorizontal(lipgloss.Center).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.tertiaryTextColor)).
+		Padding(0, 1).Width(15)
+
+	position := box.Render(
+		"Position\n" + m.CurrCrypto.Position,
+	)
+
+	var action = ""
+	switch m.PositionDisplayed{
+	case "long":
+		action +=  box.Render("Buy\n" + fmt.Sprintf("%.2f", m.CurrCrypto.BuyPrice))
+	case "short":
+		action += box.Render("Sell\n" + fmt.Sprintf("%.2f", m.CurrCrypto.SellPrice))
+	}
+
+	var tp = ""
+	switch m.PositionDisplayed{
+	case "long":
+		tp += box.Render("Take Profit\n" + fmt.Sprintf("%.2f", m.CurrCrypto.TakeProfit))
+	case "short":
+		tp += box.Render("Take Profit\n" + fmt.Sprintf("%.2f", m.CurrCrypto.ShortCoverProfit))
+	}
+
+	var sl = ""
+	switch m.PositionDisplayed{
+	case "long":
+		sl += box.Render("Stop Loss\n" + fmt.Sprintf("%.2f", m.CurrCrypto.StopLoss))
+	case "short":
+		sl += box.Render("Stop Loss\n" + fmt.Sprintf("%.2f", m.CurrCrypto.ShortCoverLoss))
+	}
+
+	trivia := ""
+	if m.CurrCrypto.Position == "unclear"{
+		trivia += ""
+	}
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top, 
+		position,
+	    action,
+		tp,
+		sl,
+	)
+}
+func (m *model)renderLiveStats()string{
+	box := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.secondaryTextColor)).
+		AlignHorizontal(lipgloss.Center).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.tertiaryTextColor)).
+		Padding(0, 1).Width(20)
+
+	creation := ""
+	creation += box.Render("Creation price\n" + fmt.Sprintf("%.2f",m.CurrCrypto.PriceAtCreation))
+
+	status := ""
+	status += box.Render("Status\n" + m.CurrCrypto.Status)
+
+	trigPos := ""
+	trigPos += box.Render("Triggered\n" + m.CurrCrypto.TriggeredPosition)
+
+	s := "P&L" + "\n"
+	if m.CurrCrypto.Status == "triggered"{
+		if m.WSRes.Kind == "loss"{
+			box = box.Foreground(lipgloss.Color("#fb2c36"))
+			s += "-" + " "
+			}else{
+				box = box.Foreground(lipgloss.Color("#00c950"))
+				s += "+" + " "
+			}
+		s += fmt.Sprintf("%.2f",m.WSRes.Value)
+	}else{
+		s += "-"
+	}
+	pl := box.Render(s)
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		creation,
+		status,
+		trigPos,
+		pl,
+	)
+}
+
+func (m *model) connectToWS() tea.Cmd {
+	return func() tea.Msg {
+		dialer := websocket.Dialer{
+			Proxy: http.ProxyFromEnvironment,
+		}
+
+		headers := http.Header{}
+		headers.Set("Origin", "https://alpstein.tech")
+
+		conn, _, err := dialer.Dial("wss://ws.alpstein.tech", headers)
+		if err != nil {
+			log.Println("WS dial error:", err)
+			return nil
+		}
+
+		// send SUB
+		_ = conn.WriteJSON(WSMsg{
+			Event:   "SUB",
+			Payload: m.CurrCryptoId,
+		})
+
+		return WSConnected{Conn: conn}
+	}
+}
+
+func (m *model)readFromWSS()tea.Cmd{
+	return func() tea.Msg {
+		if m.WSConn == nil {
+			return nil
+		}
+		_, p, err := m.WSConn.ReadMessage()
+		if err != nil {
+			log.Println("WS read error:", err)
+			return nil
+		}
+
+		var resp WSResp
+		if err := json.Unmarshal(p, &resp); err != nil {
+			return nil
+		}
+
+		return WSRespSingnal(resp)
+	}
+}
+
