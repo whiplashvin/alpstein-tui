@@ -127,6 +127,14 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 			var cmd tea.Cmd
 			m.dashboard,cmd = m.dashboard.Update(msg)
 			return m,cmd
+		case dash.BinanceWSConnected:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
+		case dash.BinanceWSRespSingnal:
+			var cmd tea.Cmd
+			m.dashboard,cmd = m.dashboard.Update(msg)
+			return m,cmd
 		case dash.DebounceFetch:
 			var cmd tea.Cmd
 			m.dashboard,cmd = m.dashboard.Update(msg)
@@ -239,6 +247,12 @@ func(m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				m.dashboard, cmd = m.dashboard.Update(msg)
 				return m, cmd
 			}
+		case "x":
+			if m.Screen == DashScreen{
+				var cmd tea.Cmd
+				m.dashboard, cmd = m.dashboard.Update(msg)
+				return m, cmd
+			}
 		}
 	}
 	var cmd tea.Cmd
@@ -294,7 +308,7 @@ func(m *model) generateSigninURL(){
 		oauthStateString = "CLI-app" 
     )
 	url := googleOAuthConfig.AuthCodeURL(oauthStateString)
-	fmt.Println(url)
+	// fmt.Println(url)
 	openBrowser(url)    
 }
 
@@ -369,7 +383,7 @@ func (m *model) AuthScreen() string {
     bg := lipgloss.NewStyle().
         Width(m.width).
         Height(m.height).
-        Background(lipgloss.Color(m.bgColor)).Margin(0).Padding(0)
+        Background(lipgloss.Color(m.bgColor)).MarginLeft(4).Padding(0)
 
     logoStyle := lipgloss.NewStyle().
         Background(lipgloss.Color(m.bgColor)).

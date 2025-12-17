@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -48,6 +49,13 @@ type WSResp struct{
 	Kind string `json:"kind"`
 	Value float64 `json:"value"`
 }
+type BianceWSResp struct {
+	PriceChange        json.Number `json:"p"`
+	PriceChangePercent json.Number `json:"P"`
+	LastPrice          json.Number `json:"c"`
+	CloseTime          json.Number `json:"C"` 
+}
+
 type CryptoQueryMetadata struct{
 	HasNextPage   bool   `json:"hasNextPage"`
 	HasPrevPage   bool   `json:"hasPrevPage"`
@@ -70,7 +78,7 @@ type SingleCryptoResponse struct{
 }
 type model struct{
 	ScreenName string
-	bgColor string
+	// bgColor string
 	primaryTextColor string
 	secondaryTextColor string
 	tertiaryTextColor string
@@ -89,8 +97,9 @@ type model struct{
 	QueryMetada CryptoQueryMetadata
 	debounceID int
 	WSConn *websocket.Conn
-	WSChan chan WSResp
 	WSRes WSResp
+	BinanceWSConn *websocket.Conn
+	BinanceWSRes BianceWSResp
 }
 
 type DebounceFetch struct {
@@ -104,15 +113,15 @@ type Cryptos []CryptoModel
 type QueryMetada CryptoQueryMetadata 
 type SetCryptoId string
 type SetCurrCrypto CryptoModel
+type PositionDisplayed string
 type WSConnected struct {
 	Conn *websocket.Conn
 }
-type WSRespSingnal WSResp
-func debounceCmd(id int, delay time.Duration) tea.Cmd {
-	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return DebounceFetch{id: id}
-	})
+type BinanceWSConnected struct {
+	Conn *websocket.Conn
 }
+type WSRespSingnal WSResp
+type BinanceWSRespSingnal BianceWSResp
 
 
 func InitDash(jwt string,url,currUser string,width,height int)*model{
@@ -135,7 +144,6 @@ func InitDash(jwt string,url,currUser string,width,height int)*model{
 func (m model)Init()tea.Cmd{
 	return tea.Batch(m.FetchLiveCryptos())
 }
-
 func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 	switch msg := msg.(type){
 	case PositionDisplayed:
@@ -154,30 +162,46 @@ func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 		m.WSConn = msg.Conn
 		return m, m.readFromWSS()
 	case WSRespSingnal:
-		m.WSRes.Kind = msg.Kind
-		m.WSRes.Value = msg.Value
-		return m, m.readFromWSS() // 🔁 KEEP LISTENING
+		m.WSRes = WSResp(msg)
+		return m, m.readFromWSS()
+
+	case BinanceWSConnected:
+		if m.BinanceWSConn != nil{
+			m.BinanceWSConn.Close()
+		}
+		m.BinanceWSConn = msg.Conn
+		return m, m.readFromBinanceWSS()
+	case BinanceWSRespSingnal:
+		m.BinanceWSRes = BianceWSResp(msg)
+		return m, m.readFromBinanceWSS()
 	case SetCryptoId:
 		m.CurrCryptoId = string(msg)
 		cmd := m.fetchCryptoByID()
 		return m, cmd
 	case SetCurrCrypto:	
 		m.CurrCrypto = CryptoModel(msg)
-		if msg.Position == "unclear"{
+		if m.CurrCrypto.Position == "unclear"{
 			m.PositionDisplayed = "long"
 		}else{
-			m.PositionDisplayed = msg.Position
+			m.PositionDisplayed = m.CurrCrypto.Position
 		}
-		cmd := m.connectToWS()
-		return m,cmd
+		cmd1 := m.connectToWS()
+		cmd2 := m.connectToBinanceWs()
+		return m, tea.Batch(cmd1,cmd2)
 	case LiveCryptosLoaded:
 		m.Cryptos = msg.Cryptos
 		m.CurrCryptoId = m.Cryptos[0].Id
 		m.CurrCrypto = m.Cryptos[0]
 		m.QueryMetada = msg.Metadata
 		m.Cursor = 0
-		cmd := m.connectToWS()
-		return m,cmd
+		if m.CurrCrypto.Position == "unclear"{
+			m.PositionDisplayed = "long"
+		}else{
+			m.PositionDisplayed = m.CurrCrypto.Position
+		}
+		cmd1 := m.connectToWS()
+		cmd2 := m.connectToBinanceWs()
+		return m, tea.Batch(cmd1,cmd2)
 	case tea.WindowSizeMsg:
         m.Width = msg.Width
 		m.Height = msg.Height
@@ -237,24 +261,29 @@ func (m model)Update(msg tea.Msg)(tea.Model,tea.Cmd){
 				}
 				return m,cmd
 			}
+		case "x":
+			var cmd tea.Cmd
+			cmd = m.openNews() 
+			return m, cmd
 	}
 		
 	}
 	return m,nil
 }
-
 func (m model)View()string{
 	bg := lipgloss.NewStyle().Width(m.Width).Height(m.Height)
 
 	left := lipgloss.NewStyle().
 	Width((m.Width / 2)-2).
 	AlignHorizontal(lipgloss.Left).
+	// Background(lipgloss.Color("#ff8787")).
 	Foreground(lipgloss.Color(m.secondaryTextColor)).MarginLeft(2).MarginTop(1).
 	Render("ALPSTEIN")
 
 	right := lipgloss.NewStyle().
 	Width(m.Width / 2).
 	AlignHorizontal(lipgloss.Right).
+	// Background(lipgloss.Color("#ff8787")).
 	Foreground(lipgloss.Color(m.primaryTextColor)).MarginTop(1).
 	Render(fmt.Sprintf("hey %s! 🫡", m.CurrUser))
 
@@ -266,12 +295,14 @@ func (m model)View()string{
 
 	headingHeight := lipgloss.Height(heading)
 
-	gap := 1 + 10
+	gap := 1 + 4
 	remaining := m.Height - headingHeight - gap
-	sidebar := lipgloss.NewStyle().Width((m.Width * 1 / 4) - 2).Height(remaining).MarginLeft(2).Padding(1).
+	sidebar := lipgloss.NewStyle().Width((m.Width * 1 / 4) - 2).Height(remaining).MarginLeft(2).Padding(0).
+	// Background(lipgloss.Color("#ff8787")).
 	Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(m.borderColor)).
 	Render(m.renderCryptos())
 	body := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 4).Height(remaining).AlignHorizontal(lipgloss.Center).
+	// Background(lipgloss.Color("#ff8787")).
 	Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(m.borderColor)).
 	Render(m.renderCryptoyID())
 
@@ -293,19 +324,22 @@ footerStinng += "[d] docs "
 footerStinng += "[t] trades "
 footerStinng += "[▲] up "
 footerStinng += "[▼] down "
+footerStinng += "[x] open news "
 footer := lipgloss.NewStyle().Width(m.Width-2).Height(1).Foreground(lipgloss.Color(m.tertiaryTextColor)).
+// Background(lipgloss.Color("#ff8777")).
 MarginLeft(2).AlignHorizontal(lipgloss.Center).Render(footerStinng)
 return bg.Render(
 	lipgloss.JoinVertical(
 		lipgloss.Top,
 		heading,
-		"\n\n\n",
+		"",
 		main,
-		"\n\n\n",
+		"",
 		footer,
 	),
 )
 }
+
 
 func(m *model)FetchLiveCryptos()tea.Cmd{
 	return func() tea.Msg {
@@ -405,58 +439,72 @@ func(m *model)fetchCryptoByID()tea.Cmd{
 	}
 }
 
+
 func (m *model)renderCryptos()string{
-	var b strings.Builder
-
-	for i, c := range m.Cryptos {
-		rowStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(m.primaryTextColor))
-
-		prefix := ""
-		if i == m.Cursor {
-			prefix = ">> "
-			rowStyle = rowStyle.Foreground(
-				lipgloss.Color(m.secondaryTextColor),
-			)
+	box := lipgloss.NewStyle().Width(m.Width * 1/4 - 2).Padding(1).Foreground(lipgloss.Color(m.secondaryTextColor))
+	var s = ""
+	for i,c := range m.Cryptos{
+		if m.Cursor == i {
+			box = box.Background(lipgloss.Color("#27272a"))
+		}else{
+			box = box.Background(lipgloss.Color(""))
 		}
 
-		x := ""
-		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00d3f2"))
+		symbolStyle := lipgloss.NewStyle().Width((m.Width * 1/4 - 4)/2)
+		symbol := symbolStyle.Render(c.Symbol)
+
+		var x = ""
+		xStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb900"))
 		if c.Status == "triggered"{
-			x += statusStyle.Render("⦿")
+			x = xStyle.Render("✵")
 		}
-		// Symbol
-		b.WriteString(rowStyle.Render(prefix + c.Symbol + " " +x))
-		b.WriteString("\n")
 
-		// Heading truncation
-		words := strings.Split(c.Heading, " ")
+		timeStyle := lipgloss.NewStyle().Width((m.Width * 1/4 - 4)/2).AlignHorizontal(lipgloss.Right)
+		time := timeStyle.Render(fmt.Sprintf("%s %s",calcDate(time.Now().UnixMilli(),c.CreatedAt),x))
+
+		top := lipgloss.JoinHorizontal(lipgloss.Top,symbol,time)
+		words := strings.Split(c.Heading," ")
 		max := 9
 		if len(words) < max {
 			max = len(words)
 		}
-
 		dots := ""
 		if len(words) > 9 {
 			dots = "..."
 		}
+		heading := strings.Join(words[:max], " ") + dots
 
-		b.WriteString(
-			rowStyle.Render(
-				strings.Join(words[:max], " ") + dots,
-			),
-		)
-		b.WriteString("\n\n")
+		var output strings.Builder
+		output.WriteString(top)
+		output.WriteString("\n")
+		output.WriteString(heading)
+		s += box.Render(output.String())
+		s += "\n"
 	}
-
-	return b.String()
+	return s
 }
-
 func(m *model)renderCryptoyID()string{
 	if m.CurrCrypto.Id != "" {
-		var s  = lipgloss.NewStyle().Foreground(lipgloss.Color(m.secondaryTextColor)).AlignHorizontal(lipgloss.Center).MarginTop(2)
-		heading := m.CurrCrypto.Heading
-		heading += m.CurrCrypto.Name
+		var s  = lipgloss.NewStyle().Foreground(lipgloss.Color(m.secondaryTextColor)).AlignHorizontal(lipgloss.Center).MarginTop(0)
+
+		symbolStyle := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 4).AlignHorizontal(lipgloss.Right).PaddingTop(1).PaddingRight(1).Foreground(lipgloss.Color(m.secondaryTextColor))
+		binancePriceStyle := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 4).AlignHorizontal(lipgloss.Right).PaddingRight(1)
+		binanceWSStyle := lipgloss.NewStyle().Width((m.Width * 3 / 4) - 4).AlignHorizontal(lipgloss.Right).PaddingRight(1)
+		negative := json.Number(m.BinanceWSRes.PriceChangePercent) < json.Number(0)
+		sign := ""
+		if !negative {
+			binanceWSStyle = binanceWSStyle.Foreground(lipgloss.Color("#fb2c36"))
+			sign += "▼"
+		}else {
+			binanceWSStyle = binanceWSStyle.Foreground(lipgloss.Color("#00c950"))
+			sign += "▲"
+		}
+		symbol := symbolStyle.Render(m.CurrCrypto.Symbol+"/"+m.CurrCrypto.Name)
+		priceFloat,_ := m.BinanceWSRes.LastPrice.Float64()
+		biancePrice := binancePriceStyle.Render("$"+fmt.Sprintf("%.2f",priceFloat))
+		binanceWS := binanceWSStyle.Render(sign+m.BinanceWSRes.PriceChangePercent.String()+"%")
+		headingStyle := lipgloss.NewStyle()
+		heading := headingStyle.Render(m.CurrCrypto.Heading)
 		
 		agentsOp := "Agent's Opinion \n"
 		agentsOp += m.renderSignals()
@@ -470,6 +518,12 @@ func(m *model)renderCryptoyID()string{
 		liveStats += m.renderLiveStats()
 
 		var output strings.Builder
+		output.WriteString(symbol)
+		output.WriteString("\n")
+		output.WriteString(biancePrice)
+		output.WriteString("\n")
+		output.WriteString(binanceWS)
+		output.WriteString("\n")
 		output.WriteString(heading)
 		output.WriteString("\n\n\n")
 		output.WriteString(agentsOp)
@@ -482,8 +536,6 @@ func(m *model)renderCryptoyID()string{
 		return ""
 	}
 }
-type PositionDisplayed string
-
 func (m *model) renderSignals() string {
 	box := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.secondaryTextColor)).
@@ -520,16 +572,35 @@ func (m *model) renderSignals() string {
 		sl += box.Render("Stop Loss\n" + fmt.Sprintf("%.2f", m.CurrCrypto.ShortCoverLoss))
 	}
 
-	trivia := ""
-	if m.CurrCrypto.Position == "unclear"{
-		trivia += ""
+	var rr = ""
+	switch m.PositionDisplayed{
+	case "long":
+		b := m.CurrCrypto.BuyPrice
+		s := m.CurrCrypto.StopLoss
+		p := m.CurrCrypto.TakeProfit
+		ratio := (p - b)/ (b -s)
+		rr += box.Render("Risk/Reward\n" + fmt.Sprintf("1:%.1f",ratio))
+	case "short":
+		s := m.CurrCrypto.SellPrice
+		sl := m.CurrCrypto.ShortCoverLoss
+		p := m.CurrCrypto.ShortCoverProfit
+		ratio := (s - p) / (sl - s)
+		rr += box.Render("Risk/Reward\n" + fmt.Sprintf("1:%.1f",ratio))
 	}
+
+	var created = ""
+		t := time.UnixMilli(m.CurrCrypto.CreatedAt).Format("15:04")
+		date := time.UnixMilli(m.CurrCrypto.CreatedAt).Format("2006-01-02")
+		arr := strings.Split(date,"-")
+		created += box.Render("Created at\n" + t + " " + fmt.Sprintf("%s/%s",arr[2],arr[1]))
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top, 
 		position,
 	    action,
 		tp,
 		sl,
+		rr,
+		created,
 	)
 }
 func (m *model)renderLiveStats()string{
@@ -572,6 +643,7 @@ func (m *model)renderLiveStats()string{
 	)
 }
 
+
 func (m *model) connectToWS() tea.Cmd {
 	return func() tea.Msg {
 		dialer := websocket.Dialer{
@@ -596,7 +668,6 @@ func (m *model) connectToWS() tea.Cmd {
 		return WSConnected{Conn: conn}
 	}
 }
-
 func (m *model)readFromWSS()tea.Cmd{
 	return func() tea.Msg {
 		if m.WSConn == nil {
@@ -616,4 +687,81 @@ func (m *model)readFromWSS()tea.Cmd{
 		return WSRespSingnal(resp)
 	}
 }
+func (m *model)connectToBinanceWs()tea.Cmd{
+	return func() tea.Msg {
+		conn,_,err := websocket.DefaultDialer.Dial(fmt.Sprintf("wss://stream.binance.com:9443/ws/%susdt@ticker",strings.ToLower(m.CurrCrypto.Symbol)),nil)
+		if err != nil{
+			log.Println("BianceWS err:",err.Error())
+			return nil
+		}
+		log.Println("Connected to binance for: ",strings.ToLower(m.CurrCrypto.Symbol))
+		return BinanceWSConnected{Conn: conn}
+	}
+}
+func(m *model)readFromBinanceWSS()tea.Cmd{
+	return func() tea.Msg {
+		if m.BinanceWSConn == nil{
+			return nil
+		}
+		_,p,err := m.BinanceWSConn.ReadMessage()
+		if err != nil{
+			log.Println("Binance WS read error:", err)
+			return nil
+		}
+		resp := BianceWSResp{}
+		if err := json.Unmarshal(p,&resp); err != nil{
+			log.Println("Binance WS json unmarshall error:", err)
+			return nil
+		}
+		return BinanceWSRespSingnal(resp)
+	}
+}
+func(m *model)openNews()tea.Cmd{
+	return func() tea.Msg {
+	cmd := "open"
+    args := []string{m.CurrCrypto.SourceUrl}
+    return exec.Command(cmd, args...).Start()
+	}
+}
 
+
+func debounceCmd(id int, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return DebounceFetch{id: id}
+	})
+}
+func calcDate(now, then int64) string {
+	d := time.Duration(now-then) * time.Millisecond
+
+	switch {
+	case d < time.Minute:
+		sec := int(d.Seconds())
+		if sec == 1 {
+			return "1 second ago"
+		}
+		return fmt.Sprintf("%d seconds ago", sec)
+
+	case d < time.Hour:
+		min := int(d.Minutes())
+		if min == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", min)
+
+	case d < 24*time.Hour:
+		hr := int(d.Hours())
+		if hr == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hr)
+
+	default:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	}
+}
+
+// cmj9k0szi002701qu1yo0tqyf
