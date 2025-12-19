@@ -629,7 +629,7 @@ func (m *model)renderLiveStats()string{
 				box = box.Foreground(lipgloss.Color("#00c950"))
 				s += "+" + " "
 			}
-		s += fmt.Sprintf("%.2f",m.WSRes.Value)
+		s += fmt.Sprintf("%.2f%s",m.WSRes.Value,"%")
 	}else{
 		s += "-"
 	}
